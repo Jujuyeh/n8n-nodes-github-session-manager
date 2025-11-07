@@ -11,7 +11,7 @@ export class GithubSessionManager implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'GitHub Session Manager',
 		name: 'githubSessionManager',
-		icon: 'file:github.svg',
+		icon: { light: 'file:github.svg', dark: 'file:github.svg' },
 		group: ['transform'],
 		version: 1,
 		description:
@@ -19,17 +19,7 @@ export class GithubSessionManager implements INodeType {
 		defaults: { name: 'GitHub Session Manager' },
 		inputs: ['main'],
 		outputs: ['main'],
-
-		// Credentials selectors in the node UI:
-		// 1) Required: our GitHub App (JWT) credential to sign and exchange the token
-		// 2) Optional: a githubApi credential dropdown (same selector UI as official GitHub nodes).
-		//    If provided AND the "Update Specific githubApi Credential" toggle is enabled,
-		//    we will try to update that exact credential by ID.
-		credentials: [
-			{ name: 'githubAppJwt', required: true },
-			{ name: 'githubApi', required: false }
-		],
-
+		credentials: [{ name: 'githubAppJwt', required: true }],
 		properties: [
 			// Behavior
 			{
@@ -38,7 +28,17 @@ export class GithubSessionManager implements INodeType {
 				type: 'boolean',
 				default: false,
 				description:
-					'If enabled, will attempt to update the githubApi credential selected in the node’s Credentials panel. If your n8n does not support the endpoint, the node continues and only returns the token.',
+					'If enabled, will attempt to update the provided githubApi credential by ID. If your n8n does not support the endpoint, the node continues and only returns the token.',
+			},
+			{
+				displayName: 'Target Credential ID',
+				name: 'targetCredentialId',
+				type: 'string',
+				default: '',
+				placeholder: 'e.g. 42',
+				displayOptions: { show: { doUpdateTargetCredential: [true] } },
+				description:
+					'ID of the githubApi credential to update. It must exist and be of type githubApi.',
 			},
 			{
 				displayName: 'n8n Base URL',
@@ -85,7 +85,7 @@ export class GithubSessionManager implements INodeType {
 								type: 'options',
 								options: [
 									{ name: 'Read', value: 'read' },
-									{ name: 'Write', value: 'write' }
+									{ name: 'Write', value: 'write' },
 								],
 								default: 'read',
 							},
@@ -115,6 +115,7 @@ export class GithubSessionManager implements INodeType {
 
 		// Node parameters
 		const doUpdateTargetCredential = this.getNodeParameter('doUpdateTargetCredential', 0, false) as boolean;
+		const targetCredentialId = this.getNodeParameter('targetCredentialId', 0, '') as string;
 		const n8nBaseUrl = this.getNodeParameter('n8nBaseUrl', 0, 'http://localhost:5678') as string;
 		const n8nApiKey = this.getNodeParameter('n8nApiKey', 0, '') as string;
 
@@ -131,7 +132,7 @@ export class GithubSessionManager implements INodeType {
 
 		const repositoriesStr = this.getNodeParameter('repositories', 0, '') as string;
 		const repositories =
-			repositoriesStr.split(',').map(s => s.trim()).filter(Boolean) || undefined;
+			repositoriesStr.split(',').map((s) => s.trim()).filter(Boolean) || undefined;
 
 		// 1) Issue installation token
 		const tokenData = await getInstallationToken({
@@ -143,49 +144,36 @@ export class GithubSessionManager implements INodeType {
 			repositories,
 		});
 
-		// 2) Optionally update ONE githubApi credential selected in the Credentials panel
+		// 2) Optionally update ONE githubApi credential by ID
 		let updateStatus: 'UPDATED' | 'SKIPPED' | 'NOT_SUPPORTED' = 'SKIPPED';
-		let updatedCredentialId: string | undefined = undefined;
-
 		if (doUpdateTargetCredential) {
+			if (!targetCredentialId) {
+				throw new Error('Target Credential ID is required when update is enabled.');
+			}
 			if (!n8nApiKey) {
 				throw new Error('n8n API Key is required when update is enabled.');
 			}
-
-			// Access the selected githubApi credential reference (ID and name) from the node definition.
-			// This mirrors how the editor stores credentials for official nodes.
-			const credRef = (this.getNode().credentials as any)?.githubApi as
-				| { id?: string; name?: string }
-				| undefined;
-
-			const targetId = credRef?.id;
-			if (!targetId) {
-				throw new Error('No githubApi credential is selected in the node’s Credentials panel.');
-			}
-
 			const result = await updateGithubCredentialById({
 				baseUrl: n8nBaseUrl,
 				apiKey: n8nApiKey,
-				credentialId: targetId,
+				credentialId: targetCredentialId,
 				newAccessToken: tokenData.token,
 			});
-
 			updateStatus = result.updated ? 'UPDATED' : 'NOT_SUPPORTED';
-			updatedCredentialId = targetId;
 		}
 
 		// 3) Output (and optional headers)
-		const out: INodeExecutionData[] = items.map(item => {
+		const out: INodeExecutionData[] = items.map((item) => {
 			const json = { ...(item.json as object) } as any;
 			json.githubToken = tokenData.token;
 			json.githubTokenExpiresAt = tokenData.expires_at;
 			json.updateStatus = updateStatus; // UPDATED | SKIPPED | NOT_SUPPORTED
-			json.updatedCredentialId = updatedCredentialId;
+			json.updatedCredentialId = doUpdateTargetCredential ? targetCredentialId : undefined;
 			if (decorateHeader) {
 				json.headers = {
 					...(json.headers || {}),
 					Authorization: `Bearer ${tokenData.token}`,
-					Accept: 'application/vnd.github+json'
+					Accept: 'application/vnd.github+json',
 				};
 			}
 			return { json };
