@@ -1,0 +1,43 @@
+{
+  "name": "n8n-nodes-github-session-manager",
+  "version": "0.1.0",
+  "description": "Manage GitHub App session tokens in n8n and optionally update a specific githubApi credential by ID.",
+  "keywords": ["n8n", "n8n-nodes", "n8n-community-node-package", "github", "jwt", "credentials", "session"],
+  "homepage": "https://github.com/Jujuyeh/n8n-nodes-github-session-manager",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Jujuyeh/n8n-nodes-github-session-manager.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Jujuyeh/n8n-nodes-github-session-manager/issues"
+  },
+  "author": "Jujujyeh",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -w -p tsconfig.build.json",
+    "lint": "eslint .",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "axios": "^1.7.7"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "eslint": "^9.11.1",
+    "n8n-workflow": "^1.46.0",
+    "typescript": "^5.6.3"
+  },
+  "engines": { "node": ">=18.0.0" },
+  "n8n": {
+    "credentials": [
+      "dist/credentials/GithubAppJwt.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/GithubSessionManager/GithubSessionManager.node.js"
+    ]
+  }
+}
