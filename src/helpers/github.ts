@@ -1,5 +1,6 @@
 import crypto from 'crypto';
-import axios, { AxiosRequestConfig } from 'axios';
+import axios from 'axios';
+import type { AxiosRequestConfig } from 'axios';
 
 function b64url(buf: Buffer) {
 	return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
