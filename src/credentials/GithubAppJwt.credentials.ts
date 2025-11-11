@@ -3,7 +3,7 @@ import type { ICredentialType, INodeProperties, Icon } from 'n8n-workflow';
 export class GithubAppJwt implements ICredentialType {
 	name = 'githubAppJwt';
 	displayName = 'GitHub App (JWT)';
-	icon: Icon = { light: 'file:github.svg', dark: 'file:github.svg' };
+	icon: Icon = { light: 'file:github.png', dark: 'file:github.png' };
 
 	properties: INodeProperties[] = [
 		{

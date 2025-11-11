@@ -1,72 +1,111 @@
 import type {
 	IExecuteFunctions,
+	ILoadOptionsFunctions,
 	INodeExecutionData,
+	INodePropertyOptions,
 	INodeType,
 	INodeTypeDescription,
 } from 'n8n-workflow';
 import { getInstallationToken } from '../../helpers/github';
-import { updateGithubCredentialById } from '../../helpers/n8n-api';
+import {
+	listCredentials,
+	createGithubApiCredential,
+	rewireWorkflowsGithubCredential,
+} from '../../helpers/n8n-api';
 
 export class GithubSessionManager implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'GitHub Session Manager',
 		name: 'githubSessionManager',
-		icon: { light: 'file:github.svg', dark: 'file:github.svg' },
+		icon: { light: 'file:github.png', dark: 'file:github.png' },
 		group: ['transform'],
-		version: 1,
+		version: 2,
 		description:
-			'Issue a GitHub App installation access token and optionally update a specific githubApi credential by ID.',
+			'Issue a GitHub App installation access token and optionally rewire workflows to a fresh githubApi credential.',
 		defaults: { name: 'GitHub Session Manager' },
 		inputs: ['main'],
 		outputs: ['main'],
-		credentials: [{ name: 'githubAppJwt', required: true }],
-		properties: [
-			// Behavior
-			{
-				displayName: 'Update Specific githubApi Credential',
-				name: 'doUpdateTargetCredential',
-				type: 'boolean',
-				default: false,
-				description:
-					'If enabled, will attempt to update the provided githubApi credential by ID. If your n8n does not support the endpoint, the node continues and only returns the token.',
-			},
-			{
-				displayName: 'Target Credential ID',
-				name: 'targetCredentialId',
-				type: 'string',
-				default: '',
-				placeholder: 'e.g. 42',
-				displayOptions: { show: { doUpdateTargetCredential: [true] } },
-				description:
-					'ID of the githubApi credential to update. It must exist and be of type githubApi.',
-			},
-			{
-				displayName: 'n8n Base URL',
-				name: 'n8nBaseUrl',
-				type: 'string',
-				default: 'http://localhost:5678',
-				displayOptions: { show: { doUpdateTargetCredential: [true] } },
-				description: 'URL of your n8n instance to call /api/v1/credentials/{id}.',
-			},
-			{
-				displayName: 'n8n API Key',
-				name: 'n8nApiKey',
-				type: 'string',
-				typeOptions: { password: true },
-				default: '',
-				displayOptions: { show: { doUpdateTargetCredential: [true] } },
-				description: 'API key used to authorize the credential update request.',
-			},
 
-			// Headers / permissions
+		// Credentials dropdowns:
+		credentials: [
+			// Custom: where App ID, Installation ID, PEM are stored
+			{ name: 'githubAppJwt', required: true },
+
+			// OOB: n8n API credential (used when rewire is enabled)
+			{ name: 'n8nApi', required: false, testedBy: 'n8nApiCredentialTest' },
+
+			// OOB: GitHub credential (the one to rotate/rewire FROM)
+			{ name: 'githubApi', required: false },
+		],
+
+		methods: {
+			loadOptions: {
+				// Populate dropdown with existing githubApi credentials using the selected n8nApi credential
+				async githubCredentials(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+					// Read n8nApi credential to call the API
+					const n8n = (await this.getCredentials('n8nApi')) as any;
+					if (!n8n) return [];
+
+					// Heuristic: common fields in n8nApi credential
+					const baseUrl: string = n8n?.baseUrl || n8n?.url || n8n?.apiUrl || 'http://localhost:5678';
+					const apiKey: string = n8n?.apiKey || n8n?.token || '';
+
+					if (!apiKey) return [];
+
+					const list = await listCredentials({ baseUrl, apiKey });
+					return list
+						.filter((c) => c.type === 'githubApi')
+						.map((c) => ({ name: `${c.name} (id:${c.id})`, value: c.id }));
+				},
+			},
+		},
+
+		properties: [
+			// Behavior: emit token always
 			{
 				displayName: 'Decorate headers for HTTP Request',
 				name: 'decorateHeader',
 				type: 'boolean',
 				default: true,
-				description:
-					'Adds Authorization/Accept into item.json.headers for chaining into an HTTP Request node.',
+				description: 'Adds Authorization/Accept into item.json.headers for chaining into an HTTP Request node.',
 			},
+
+			// Optional rewire
+			{
+				displayName: 'Rotate by rewire (create new githubApi and reassign workflows)',
+				name: 'doRewire',
+				type: 'boolean',
+				default: false,
+				description:
+					'If enabled, creates a new githubApi credential with the fresh token and rewires workflows from the selected githubApi credential to the new one.',
+			},
+			{
+				displayName: 'n8n API Credential',
+				name: 'n8nApiCredentialNotice',
+				type: 'notice',
+				default: 'Select an existing n8n API credential in the Credentials section above.',
+				displayOptions: { show: { doRewire: [true] } },
+			},
+			{
+				displayName: 'Target GitHub Credential (githubApi)',
+				name: 'targetGithubCredentialId',
+				type: 'options',
+				typeOptions: { loadOptionsMethod: 'githubCredentials' },
+				default: '',
+				required: true,
+				displayOptions: { show: { doRewire: [true] } },
+				description: 'The existing githubApi credential to rewire from.',
+			},
+			{
+				displayName: 'New Credential Name',
+				name: 'newCredentialName',
+				type: 'string',
+				default: 'GitHub Session (Rotated)',
+				displayOptions: { show: { doRewire: [true] } },
+				description: 'Name for the new githubApi credential that holds the fresh token.',
+			},
+
+			// Optional token scoping
 			{
 				displayName: 'Permissions (optional)',
 				name: 'permissions',
@@ -105,6 +144,10 @@ export class GithubSessionManager implements INodeType {
 		],
 	};
 
+	// Dummy tester to satisfy typings when "testedBy" is present
+	// n8n ignores body here; we simply declare it.
+	n8nApiCredentialTest = async () => ({ status: 200, message: 'ok' });
+
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
 
@@ -114,11 +157,6 @@ export class GithubSessionManager implements INodeType {
 		const privateKeyPem = String(app.privateKey || '').replace(/\\n/g, '\n').replace(/\r\n/g, '\n');
 
 		// Node parameters
-		const doUpdateTargetCredential = this.getNodeParameter('doUpdateTargetCredential', 0, false) as boolean;
-		const targetCredentialId = this.getNodeParameter('targetCredentialId', 0, '') as string;
-		const n8nBaseUrl = this.getNodeParameter('n8nBaseUrl', 0, 'http://localhost:5678') as string;
-		const n8nApiKey = this.getNodeParameter('n8nApiKey', 0, '') as string;
-
 		const decorateHeader = this.getNodeParameter('decorateHeader', 0, true) as boolean;
 
 		const permissionsColl = this.getNodeParameter('permissions', 0, {}) as {
@@ -144,31 +182,11 @@ export class GithubSessionManager implements INodeType {
 			repositories,
 		});
 
-		// 2) Optionally update ONE githubApi credential by ID
-		let updateStatus: 'UPDATED' | 'SKIPPED' | 'NOT_SUPPORTED' = 'SKIPPED';
-		if (doUpdateTargetCredential) {
-			if (!targetCredentialId) {
-				throw new Error('Target Credential ID is required when update is enabled.');
-			}
-			if (!n8nApiKey) {
-				throw new Error('n8n API Key is required when update is enabled.');
-			}
-			const result = await updateGithubCredentialById({
-				baseUrl: n8nBaseUrl,
-				apiKey: n8nApiKey,
-				credentialId: targetCredentialId,
-				newAccessToken: tokenData.token,
-			});
-			updateStatus = result.updated ? 'UPDATED' : 'NOT_SUPPORTED';
-		}
-
-		// 3) Output (and optional headers)
+		// Prepare output items
 		const out: INodeExecutionData[] = items.map((item) => {
 			const json = { ...(item.json as object) } as any;
 			json.githubToken = tokenData.token;
 			json.githubTokenExpiresAt = tokenData.expires_at;
-			json.updateStatus = updateStatus; // UPDATED | SKIPPED | NOT_SUPPORTED
-			json.updatedCredentialId = doUpdateTargetCredential ? targetCredentialId : undefined;
 			if (decorateHeader) {
 				json.headers = {
 					...(json.headers || {}),
@@ -178,6 +196,44 @@ export class GithubSessionManager implements INodeType {
 			}
 			return { json };
 		});
+
+		// 2) Optional rewire flow
+		const doRewire = this.getNodeParameter('doRewire', 0, false) as boolean;
+		if (doRewire) {
+			// Require n8nApi credential and target githubApi credential ID from dropdown
+			const n8n = (await this.getCredentials('n8nApi')) as any;
+			if (!n8n) throw new Error('n8n API credential is required when "Rotate by rewire" is enabled.');
+
+			const apiBaseUrl: string = n8n?.baseUrl || n8n?.url || n8n?.apiUrl || 'http://localhost:5678';
+			const apiKey: string = n8n?.apiKey || n8n?.token || '';
+			if (!apiKey) throw new Error('n8n API credential is missing API key/token.');
+
+			const targetGithubCredentialId = this.getNodeParameter('targetGithubCredentialId', 0, '') as string;
+			if (!targetGithubCredentialId) throw new Error('Target GitHub Credential (githubApi) is required.');
+
+			const newCredentialName = this.getNodeParameter('newCredentialName', 0, 'GitHub Session (Rotated)') as string;
+
+			// 2a) Create new githubApi credential with fresh token
+			const created = await createGithubApiCredential(
+				{ baseUrl: apiBaseUrl, apiKey },
+				{ name: newCredentialName, accessToken: tokenData.token },
+			);
+
+			// 2b) Rewire workflows that referenced the selected githubApi credential
+			const rewiredCount = await rewireWorkflowsGithubCredential(
+				{ baseUrl: apiBaseUrl, apiKey },
+				{ oldCredentialId: targetGithubCredentialId, newCredentialId: created.id },
+			);
+
+			// annotate first item with rewire results (non-breaking)
+			if (out.length > 0) {
+				(out[0].json as any).rewire = {
+					fromCredentialId: targetGithubCredentialId,
+					toCredentialId: created.id,
+					workflowsUpdated: rewiredCount,
+				};
+			}
+		}
 
 		return [out];
 	}

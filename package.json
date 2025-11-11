@@ -1,7 +1,7 @@
 {
   "name": "n8n-nodes-github-session-manager",
-  "version": "0.1.0",
-  "description": "Manage GitHub App session tokens in n8n and optionally update a specific githubApi credential by ID.",
+  "version": "0.2.0",
+  "description": "Manage GitHub App session tokens in n8n and optionally rewire workflows to a freshly issued githubApi credential.",
   "keywords": ["n8n", "n8n-nodes", "n8n-community-node-package", "github", "jwt", "credentials", "session"],
   "homepage": "https://github.com/Jujuyeh/n8n-nodes-github-session-manager",
   "repository": {
@@ -22,7 +22,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.build.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "axios": "^1.7.7"
