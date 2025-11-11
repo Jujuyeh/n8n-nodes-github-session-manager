@@ -26,39 +26,12 @@ export class GithubSessionManager implements INodeType {
 		inputs: ['main'],
 		outputs: ['main'],
 
-		// Credentials dropdowns:
+		// Credentials shown in the node’s credential selectors
 		credentials: [
-			// Custom: where App ID, Installation ID, PEM are stored
-			{ name: 'githubAppJwt', required: true },
-
-			// OOB: n8n API credential (used when rewire is enabled)
-			{ name: 'n8nApi', required: false, testedBy: 'n8nApiCredentialTest' },
-
-			// OOB: GitHub credential (the one to rotate/rewire FROM)
-			{ name: 'githubApi', required: false },
+			{ name: 'githubAppJwt', required: true }, // custom credential (App ID, Installation ID, PEM)
+			{ name: 'n8nApi', required: false },      // OOB n8n API credential (used for rewire)
+			{ name: 'githubApi', required: false },   // OOB GitHub credential (for selector context)
 		],
-
-		methods: {
-			loadOptions: {
-				// Populate dropdown with existing githubApi credentials using the selected n8nApi credential
-				async githubCredentials(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-					// Read n8nApi credential to call the API
-					const n8n = (await this.getCredentials('n8nApi')) as any;
-					if (!n8n) return [];
-
-					// Heuristic: common fields in n8nApi credential
-					const baseUrl: string = n8n?.baseUrl || n8n?.url || n8n?.apiUrl || 'http://localhost:5678';
-					const apiKey: string = n8n?.apiKey || n8n?.token || '';
-
-					if (!apiKey) return [];
-
-					const list = await listCredentials({ baseUrl, apiKey });
-					return list
-						.filter((c) => c.type === 'githubApi')
-						.map((c) => ({ name: `${c.name} (id:${c.id})`, value: c.id }));
-				},
-			},
-		},
 
 		properties: [
 			// Behavior: emit token always
@@ -144,9 +117,27 @@ export class GithubSessionManager implements INodeType {
 		],
 	};
 
-	// Dummy tester to satisfy typings when "testedBy" is present
-	// n8n ignores body here; we simply declare it.
-	n8nApiCredentialTest = async () => ({ status: 200, message: 'ok' });
+	// Move loadOptions methods OUTSIDE of description (per n8n typings)
+	methods = {
+		loadOptions: {
+			// Populate dropdown with existing githubApi credentials using the selected n8nApi credential
+			async githubCredentials(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const n8n = (await this.getCredentials('n8nApi')) as any;
+				if (!n8n) return [];
+
+				// Common field names on the built-in n8n API credential
+				const baseUrl: string = n8n?.baseUrl || n8n?.url || n8n?.apiUrl || 'http://localhost:5678';
+				const apiKey: string = n8n?.apiKey || n8n?.token || '';
+
+				if (!apiKey) return [];
+
+				const list = await listCredentials({ baseUrl, apiKey });
+				return list
+					.filter((c) => c.type === 'githubApi')
+					.map((c) => ({ name: `${c.name} (id:${c.id})`, value: c.id }));
+			},
+		},
+	};
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
@@ -200,7 +191,6 @@ export class GithubSessionManager implements INodeType {
 		// 2) Optional rewire flow
 		const doRewire = this.getNodeParameter('doRewire', 0, false) as boolean;
 		if (doRewire) {
-			// Require n8nApi credential and target githubApi credential ID from dropdown
 			const n8n = (await this.getCredentials('n8nApi')) as any;
 			if (!n8n) throw new Error('n8n API credential is required when "Rotate by rewire" is enabled.');
 
